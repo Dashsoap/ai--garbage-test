@@ -168,9 +168,12 @@ def predict_image(model, device, image):
     class_descriptions = [
         '🥬 食物残渣、果皮等有机垃圾',
         '🔋 电池、化学品等危险废物', 
-        '🗑️ 不可回收的一般垃圾',
+        '🗑️不可回收的一般垃圾',
         '♻️ 塑料、玻璃、纸张、金属等可回收物品'
     ]
+    
+    # 置信度阈值
+    CONFIDENCE_THRESHOLD = 0.95
     
     try:
         # 预处理图像
@@ -183,17 +186,37 @@ def predict_image(model, device, image):
             predicted_class = torch.argmax(probabilities).item()
             confidence = probabilities[predicted_class].item()
         
-        # 返回结果
-        result = {
-            'predicted_class': predicted_class,
-            'class_name': class_names[predicted_class],
-            'class_name_chinese': class_names_chinese[predicted_class],
-            'class_description': class_descriptions[predicted_class],
-            'confidence': confidence,
-            'probabilities': probabilities.cpu().numpy(),
-            'all_classes': class_names_chinese,
-            'all_descriptions': class_descriptions
-        }
+        # 判断是否为垃圾（置信度阈值判断）
+        if confidence < CONFIDENCE_THRESHOLD:
+            # 置信度低于阈值，判断为非垃圾
+            result = {
+                'is_garbage': False,
+                'predicted_class': -1,
+                'class_name': 'not_garbage',
+                'class_name_chinese': '不是垃圾',
+                'class_description': '🚫 此图片不是垃圾，请上传垃圾图片进行分类',
+                'confidence': confidence,
+                'max_confidence': confidence,
+                'probabilities': probabilities.cpu().numpy(),
+                'all_classes': class_names_chinese,
+                'all_descriptions': class_descriptions,
+                'threshold': CONFIDENCE_THRESHOLD
+            }
+        else:
+            # 置信度足够高，判断为垃圾
+            result = {
+                'is_garbage': True,
+                'predicted_class': predicted_class,
+                'class_name': class_names[predicted_class],
+                'class_name_chinese': class_names_chinese[predicted_class],
+                'class_description': class_descriptions[predicted_class],
+                'confidence': confidence,
+                'max_confidence': confidence,
+                'probabilities': probabilities.cpu().numpy(),
+                'all_classes': class_names_chinese,
+                'all_descriptions': class_descriptions,
+                'threshold': CONFIDENCE_THRESHOLD
+            }
         
         return result
         
@@ -205,10 +228,18 @@ def predict_image(model, device, image):
 def create_probability_chart(result):
     """创建概率分布图表"""
     try:
-        class_names_chinese = result['class_names_chinese']
-        probabilities = result['probabilities']
-        
-        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+        if not result['is_garbage']:
+            # 如果不是垃圾，显示所有类别的低概率
+            class_names_chinese = result['all_classes']
+            probabilities = result['probabilities']
+            colors = ['#FFB6C1', '#FFB6C1', '#FFB6C1', '#FFB6C1']  # 浅色表示低置信度
+            title_text = f"各类别概率分布 (最高置信度: {result['max_confidence']:.2%}, 阈值: {result['threshold']:.0%})"
+        else:
+            # 如果是垃圾，正常显示
+            class_names_chinese = result['all_classes']
+            probabilities = result['probabilities']
+            colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+            title_text = f"各类别概率分布 (置信度: {result['confidence']:.2%})"
         
         fig = go.Figure(data=[
             go.Bar(
@@ -222,7 +253,7 @@ def create_probability_chart(result):
         ])
         
         fig.update_layout(
-            title="各类别概率分布",
+            title=title_text,
             xaxis_title="概率",
             yaxis_title="垃圾类别",
             height=300,
@@ -252,6 +283,7 @@ def main():
         - **准确率**: 97.39%
         - **分类类别**: 4类
         - **支持格式**: JPG, PNG, JPEG
+        - **置信度阈值**: 95% (低于此值判断为非垃圾)
         """)
         
         st.markdown("### 🎯 分类类别")
@@ -316,59 +348,90 @@ def main():
                     # 显示预测结果
                     confidence = result['confidence']
                     
-                    # 根据置信度设置颜色
-                    if confidence >= 0.8:
-                        confidence_class = "confidence-high"
-                        confidence_icon = "🟢"
-                    elif confidence >= 0.6:
-                        confidence_class = "confidence-medium" 
-                        confidence_icon = "🟡"
+                    if not result['is_garbage']:
+                        # 不是垃圾的情况
+                        st.markdown(f"""
+                        <div class="result-box">
+                        <h3>🚫 识别结果</h3>
+                        <h2 style="color: #dc3545; margin: 0.5rem 0;">
+                            {result['class_description']}
+                        </h2>
+                        <p style="font-size: 1.2rem; margin: 0.5rem 0;">
+                            <strong>判断:</strong> {result['class_name_chinese']}
+                        </p>
+                        <p style="font-size: 1.2rem; margin: 0.5rem 0;">
+                            <strong>最高置信度:</strong> 
+                            <span class="confidence-low">
+                                🔴 {confidence:.2%} (低于阈值 {result['threshold']:.0%})
+                            </span>
+                        </p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # 显示概率分布图
+                        st.plotly_chart(
+                            create_probability_chart(result), 
+                            use_container_width=True
+                        )
+                        
+                        # 提示信息
+                        st.info("💡 **提示**: 请上传清晰的垃圾图片进行分类检测。本系统专门识别生物垃圾、可回收垃圾、有害垃圾和其他垃圾。")
+                        
                     else:
-                        confidence_class = "confidence-low"
-                        confidence_icon = "🔴"
-                    
-                    st.markdown(f"""
-                    <div class="result-box">
-                    <h3>🎯 预测结果</h3>
-                    <h2 style="color: #2E8B57; margin: 0.5rem 0;">
-                        {result['class_description']}
-                    </h2>
-                    <p style="font-size: 1.2rem; margin: 0.5rem 0;">
-                        <strong>类别:</strong> {result['class_name_chinese']} ({result['class_name']})
-                    </p>
-                    <p style="font-size: 1.2rem; margin: 0.5rem 0;">
-                        <strong>置信度:</strong> 
-                        <span class="{confidence_class}">
-                            {confidence_icon} {confidence:.2%}
-                        </span>
-                    </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # 显示概率分布图
-                    st.plotly_chart(
-                        create_probability_chart(result), 
-                        use_container_width=True
-                    )
-                    
-                    # 处理建议
-                    st.markdown("### 💡 处理建议")
-                    if result['predicted_class'] == 0:  # 生物垃圾
-                        st.success("🥬 请投入**绿色**垃圾桶（生物垃圾），可用于堆肥处理。")
-                    elif result['predicted_class'] == 1:  # 有害垃圾
-                        st.error("🔋 请投入**红色**垃圾桶（有害垃圾），需要专门处理！")
-                    elif result['predicted_class'] == 2:  # 其他垃圾
-                        st.info("🗑️ 请投入**灰色**垃圾桶（其他垃圾），进行焚烧处理。")
-                    else:  # 可回收垃圾
-                        st.success("♻️ 请投入**蓝色**垃圾桶（可回收垃圾），可循环利用！")
-                    
-                    # 置信度解释
-                    if confidence < 0.6:
-                        st.warning("⚠️ 置信度较低，建议人工确认分类结果。")
-                    elif confidence < 0.8:
-                        st.info("ℹ️ 置信度中等，结果基本可信。")
-                    else:
-                        st.success("✅ 置信度很高，结果可信度极高！")
+                        # 是垃圾的情况（原有逻辑）
+                        # 根据置信度设置颜色
+                        if confidence >= 0.98:
+                            confidence_class = "confidence-high"
+                            confidence_icon = "🟢"
+                        elif confidence >= 0.96:
+                            confidence_class = "confidence-medium" 
+                            confidence_icon = "🟡"
+                        else:
+                            confidence_class = "confidence-low"
+                            confidence_icon = "🔴"
+                        
+                        st.markdown(f"""
+                        <div class="result-box">
+                        <h3>🎯 预测结果</h3>
+                        <h2 style="color: #2E8B57; margin: 0.5rem 0;">
+                            {result['class_description']}
+                        </h2>
+                        <p style="font-size: 1.2rem; margin: 0.5rem 0;">
+                            <strong>类别:</strong> {result['class_name_chinese']} ({result['class_name']})
+                        </p>
+                        <p style="font-size: 1.2rem; margin: 0.5rem 0;">
+                            <strong>置信度:</strong> 
+                            <span class="{confidence_class}">
+                                {confidence_icon} {confidence:.2%}
+                            </span>
+                        </p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # 显示概率分布图
+                        st.plotly_chart(
+                            create_probability_chart(result), 
+                            use_container_width=True
+                        )
+                        
+                        # 处理建议
+                        st.markdown("### 💡 处理建议")
+                        if result['predicted_class'] == 0:  # 生物垃圾
+                            st.success("🥬 请投入**绿色**垃圾桶（生物垃圾），可用于堆肥处理。")
+                        elif result['predicted_class'] == 1:  # 有害垃圾
+                            st.error("🔋 请投入**红色**垃圾桶（有害垃圾），需要专门处理！")
+                        elif result['predicted_class'] == 2:  # 其他垃圾
+                            st.info("🗑️ 请投入**灰色**垃圾桶（其他垃圾），进行焚烧处理。")
+                        else:  # 可回收垃圾
+                            st.success("♻️ 请投入**蓝色**垃圾桶（可回收垃圾），可循环利用！")
+                        
+                        # 置信度解释
+                        if confidence < 0.96:
+                            st.warning("⚠️ 置信度相对较低，建议人工确认分类结果。")
+                        elif confidence < 0.98:
+                            st.info("ℹ️ 置信度良好，结果基本可信。")
+                        else:
+                            st.success("✅ 置信度极高，结果非常可信！")
         
         else:
             st.info("👆 请在左侧上传图片开始分析")
